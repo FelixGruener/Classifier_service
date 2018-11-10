@@ -1,5 +1,6 @@
 from app import app
 from app import db
+from app.models import User
 from app.validators import RegistrationValidator, AuthValidator
 
 #!flask/bin/python
@@ -10,41 +11,28 @@ from flask_jwt_extended import (
     jwt_required, create_access_token,
     get_jwt_identity
 )
+
 # To load entire saved model from disk
 from keras.models import load_model
 import numpy as np
 from keras.preprocessing import image
-from keras.preprocessing.image import img_to_array, ImageDataGenerator, load_img
-# from keras.applications.inception_resnet_v2 import preprocess_input
-from PIL import Image
-import base64
-import io
+from keras.preprocessing.image import img_to_array, load_img
 from keras.applications.inception_resnet_v2 import InceptionResNetV2, preprocess_input
-import cv2
-
-from app.models import User
+from keras import backend as K
 
 MODEL_DIR = '/data/dermatologist-ai/my_model.h5'
 
-# transfer_model = InceptionResNetV2(include_top=False)
+transfer_model = InceptionResNetV2(include_top=False)
+# my_model = load_model(MODEL_DIR)
 
-my_model = load_model(MODEL_DIR)
-# my_model.load_weights(MODEL_DIR)
-my_model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+# my_model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
 
 def path_to_tensor(img_path):
-    img = image.load_img(img_path, target_size=(1022, 767))
+    img = image.load_img(img_path, target_size=(384, 256))
     x = image.img_to_array(img)
     return np.expand_dims(x, axis=0)
-    
 
-def preprocess_image(image, target_size=(1022, 767)):
-    if image.mode != "RGB":
-        image.convert("RGB")
-    image = image.resize(target_size)
-    image = img_to_array(image)
-    image = np.expand_dims(image, axis=0)
-    return preprocess_input(image)
 
 @app.route('/')
 @app.route('/index')
@@ -53,6 +41,7 @@ def index():
         This is the home page, to be improved later to include a template
     """
     return "Welcome to Dermatology classification Web API"
+
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -109,27 +98,45 @@ def login():
     else:
         return jsonify({"msg": "User can not be authenticated"}), 404
 
-def extract_InceptionV2(tensor):
-    return InceptionResNetV2(include_top=False).predict(preprocess_input(tensor))
-
     
+def make_transfer_prediction(tensor):
+    with K.get_session().graph.as_default() as g:
+        return transfer_model.predict(preprocess_input(tensor))
+
+def make_custom_prediction(pred):
+    with K.get_session().graph.as_default() as g:
+        my_model = load_model(MODEL_DIR)
+        return my_model.predict(pred, batch_size=1)[0]
+
+def humanize_prediction(preds):
+    "convert predictions to human readable output"
+    labels = ['melanoma', 'nevus', 'seborrheic_keratosis']
+    predicted = labels[np.argmax(preds)]
+    confidence = preds.tolist()
+    prediction_stats = dict(zip(labels, confidence))
+    return predicted, prediction_stats
+
 @app.route('/classify', methods=['POST'])
-#@jwt_required
+# @jwt_required
 def classify():
     """
         It accepts Image for classification and returns the result
     """
     # Get test image ready
-    print("helo classify")
     try:
-        image_file = request.files['file']
-        print(image_file)
-        image_tensor = path_to_tensor(image_file)
-        print(image_tensor.shape)
-#         img = extract_InceptionV2(image_tensor)
-        prediction = my_model.predict(image_tensor)
+        test = request.files['file']
+        test_image = path_to_tensor(test)
+        print (test_image.shape)
+        transfer_pred = make_transfer_prediction(test_image)
+        print(transfer_pred.shape)
+        prediction = make_custom_prediction(transfer_pred)
         print(prediction)
-        return jsonify(prediction)
+        predicted, prediction_stats = humanize_prediction(prediction)
+        print(predicted, prediction_stats)
+        return jsonify({
+            'predicted class': predicted,
+            'prediction stats': prediction_stats
+            })
     except:
         raise
-#        return "Could not make prediction"
+#         return "Could not make prediction"
